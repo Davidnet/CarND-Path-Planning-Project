@@ -9,6 +9,11 @@
 using std::string;
 using std::vector;
 
+const double SECURITY_DISTANCE = 30.0;
+const double MIN_DIST = SECURITY_DISTANCE / 2.0;
+const double MAX_SPEED = 49.7;
+const double MAX_ACC = 0.224;
+
 // Checks if the SocketIO event has JSON data.
 // If there is data the JSON object in string format will be returned,
 //   else the empty string "" will be returned.
