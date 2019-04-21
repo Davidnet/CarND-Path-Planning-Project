@@ -166,8 +166,8 @@ int main() {
             double prev_car_y = car_y - std::sin(car_yaw);
             ptsx.push_back(prev_car_x);
             ptsx.push_back(car_x);
-            ptsx.push_back(prev_car_y);
-            ptsx.push_back(car_y);
+            ptsy.push_back(prev_car_y);
+            ptsy.push_back(car_y);
           } else {
             ref_x = previous_path_x[prev_size-1];
             ref_y = previous_path_y[prev_size-1];
