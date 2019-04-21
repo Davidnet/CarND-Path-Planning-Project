@@ -7,6 +7,7 @@
 #include "Eigen-3.3/Eigen/QR"
 #include "helpers.h"
 #include "json.hpp"
+#include "spline.h"
 
 // for convenience
 using nlohmann::json;
@@ -50,8 +51,12 @@ int main() {
     map_waypoints_dy.push_back(d_y);
   }
 
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
-               &map_waypoints_dx,&map_waypoints_dy]
+  // Starting point
+  int lane = 1;
+  double ref_vel = 0.0;
+
+  h.onMessage([&ref_vel, &map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
+               &map_waypoints_dx,&map_waypoints_dy,&lane]
               (uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
@@ -88,16 +93,145 @@ int main() {
           //   of the road.
           auto sensor_fusion = j[1]["sensor_fusion"];
 
-          json msgJson;
+          int prev_size = previous_path_x.size();
+          if (prev_size > 0) {
+            car_s = end_path_s;
+          }
+          bool car_ahead = false;
+          bool car_left = false;
+          bool car_right = false;
+          bool too_close = false;
 
+          double final_vel = 0.0;
+
+          for (auto sf: sensor_fusion){
+            int id = sf[0];
+            float x = sf[1];
+            float y = sf[2];
+            float vx = sf[3];
+            float vy = sf[4];
+            float s = sf[5];
+            float d = sf[6];
+            double check_speed = std::sqrt( std::pow(vx,2) + std::pow(vy,2) );
+            int check_lane = (int) d/4;
+            s += ((double)prev_size*0.02*check_speed);
+
+            //Car Ok
+            if (check_lane < 0) {
+              continue;
+            }
+            if (check_lane == lane){
+              // Lane OK
+              car_ahead |= (s > car_s && s - car_s < SECURITY_DISTANCE) ? true : false;
+              if (car_ahead) {
+                final_vel = check_speed;
+              }
+            }else if ( (check_lane - lane) == -1 ) {
+              //Lane left
+              car_left |= (car_s - SECURITY_DISTANCE < s && car_s + SECURITY_DISTANCE > s) ? true : false;
+            }else if ( (check_lane - lane) == 1 ) {
+              // Lane right
+              car_right |= (car_s - SECURITY_DISTANCE < s && car_s + SECURITY_DISTANCE > s) ? true : false;
+            } else {
+              ;
+            }
+          }
+
+          if (car_ahead){
+            if (!car_right && lane != 2) {
+              lane++;
+            }else if (!car_left && lane > 0) {
+              lane--;
+            }else if (ref_vel > final_vel) {
+              ref_vel -= MAX_ACC;
+            }
+          }else{
+            if (ref_vel < MAX_SPEED) {
+              ref_vel += MAX_ACC;
+            }
+          }
+
+          // Let us create (x,y) waypoints, that are spaced over 30m.
+          // This will be the points that are interpolated
+          vector<double> ptsx;
+          vector<double> ptsy;
+          // References
+          double ref_x = car_x;
+          double ref_y = car_y;
+          double ref_yaw = deg2rad(car_yaw);
+
+          if (prev_size < 2){
+            // Degenerative case at t0, t1
+            double prev_car_x = car_x - std::cos(car_yaw);
+            double prev_car_y = car_y - std::sin(car_yaw);
+            ptsx.push_back(prev_car_x);
+            ptsx.push_back(car_x);
+            ptsx.push_back(prev_car_y);
+            ptsx.push_back(car_y);
+          } else {
+            ref_x = previous_path_x[prev_size-1];
+            ref_y = previous_path_y[prev_size-1];
+
+            double ref_x_prev = previous_path_x[prev_size-2];
+            double ref_y_prev = previous_path_y[prev_size-2];
+            ref_yaw = std::atan2(ref_y - ref_y_prev, ref_x - ref_x_prev);
+            ptsx.push_back(ref_x_prev);
+            ptsx.push_back(ref_x);
+            ptsy.push_back(ref_y_prev);
+            ptsy.push_back(ref_y);
+          }
+
+          // Obtain waypoint above references
+          vector<double> next_wp0 = getXY(car_s+30,(2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y );
+          vector<double> next_wp1 = getXY(car_s+60,(2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y );
+          vector<double> next_wp2 = getXY(car_s+90,(2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y );
+          ptsx.push_back(next_wp0[0]);
+          ptsx.push_back(next_wp1[0]);
+          ptsx.push_back(next_wp2[0]);
+          ptsy.push_back(next_wp0[1]);
+          ptsy.push_back(next_wp1[1]);
+          ptsy.push_back(next_wp2[1]);
+
+          for (unsigned int i = 0; i < ptsx.size(); i++) { 
+            // Change reference
+            double shift_x = ptsx[i]-ref_x;
+            double shift_y = ptsy[i]-ref_y;
+            ptsx[i] = (shift_x*std::cos(-ref_yaw) - shift_y*std::sin(-ref_yaw));
+            ptsy[i] = (shift_x*std::sin(-ref_yaw) + shift_y*std::cos(-ref_yaw));
+          }
+          // Spline creation and computation
+          tk::spline s;
+          s.set_points(ptsx, ptsy);
           vector<double> next_x_vals;
           vector<double> next_y_vals;
+          for (unsigned int i = 0; i < previous_path_x.size(); i++) {
+            next_x_vals.push_back(previous_path_x[i]);
+            next_y_vals.push_back(previous_path_y[i]);
+          }
 
-          /**
-           * TODO: define a path made up of (x,y) points that the car will visit
-           *   sequentially every .02 seconds
-           */
+          // Boundaries
+          double target_x = 30.0;
+          double target_y = s(target_x);
+          double target_dist = std::sqrt(std::pow(target_x, 2) + std::pow(target_y, 2));
+          double x_add_on = 0;
+          // Filler vector
+          for ( unsigned int i = 1; i <= 50 - previous_path_x.size(); i++) {
+            double N = (target_dist / (0.02 * ref_vel / 2.24));
+            double x_point = x_add_on + (target_x) / N;
+            double y_point = s(x_point);
+            x_add_on = x_point;
 
+            double x_ref = x_point;
+            double y_ref = y_point;
+            x_point = (x_ref*std::cos(ref_yaw) - y_ref*std::sin(ref_yaw));
+            y_point = (x_ref*std::sin(ref_yaw) + y_ref*std::cos(ref_yaw));
+            x_point += ref_x;
+            y_point += ref_y;
+            next_x_vals.push_back(x_point);
+            next_y_vals.push_back(y_point);
+          }
+
+          json msgJson;
 
           msgJson["next_x"] = next_x_vals;
           msgJson["next_y"] = next_y_vals;
@@ -105,14 +239,14 @@ int main() {
           auto msg = "42[\"control\","+ msgJson.dump()+"]";
 
           ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
-        }  // end "telemetry" if
+
+          }
       } else {
-        // Manual driving
         std::string msg = "42[\"manual\",{}]";
-        ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
+        ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT); 
       }
-    }  // end websocket if
-  }); // end h.onMessage
+    }
+               });
 
   h.onConnection([&h](uWS::WebSocket<uWS::SERVER> ws, uWS::HttpRequest req) {
     std::cout << "Connected!!!" << std::endl;
