@@ -105,41 +105,42 @@ using the following settings:
 
 Please (do your best to) stick to [Google's C++ style guide](https://google.github.io/styleguide/cppguide.html).
 
-## Project Instructions and Rubric
+## Walkthrough
 
-Note: regardless of the changes you make, your project must be buildable using
-cmake and make!
+For this project we use the concepts of waypoint navigation and spline points, we recive the waypoints from the data, and we set up the acceleration and the path that the car should follow, as modified in the headers of the helpers library, we limit car acceleration to 0.224 miles/s^2.
 
+### Frenet Coordinates
 
-## Call for IDE Profiles Pull Requests
+We use standard s, d coordinates to keep the car on "straight lines" on each lane. We keep generating straight points on this coordinate system if there is no event logic, that keep us from continue in that lane, we keep straight accelarating until `MAX_SPEED`.
 
-Help your fellow students!
+### Splines Use
+Keeping a line on Frenet coordinates is smooth enough, but whenever we need to take into account lane changes we create splines from points 30m above our reference, we prefer to use spline instead of polynomial regression, because it is a smoother car driving experience. We use the `spline.h` header only library for computing trajectories with spline and have strong boundary points at 30m evenly spaced.
 
-We decided to create Makefiles with cmake to keep this project as platform
-agnostic as possible. Similarly, we omitted IDE profiles in order to ensure
-that students don't feel pressured to use one IDE or another.
+### Logic to smart lane changes
+We hardcode the logic to change lanes, we strongly think that this can be improved by designing a finite state machine, but due to the complexity and unfamilarity of c++, it was more faster to just add the whole logic process in a procedual way.
 
-However! I'd love to help people get up and running with their IDEs of choice.
-If you've created a profile for an IDE that you think other students would
-appreciate, we'd love to have you add the requisite profile files and
-instructions to ide_profiles/. For example if you wanted to add a VS Code
-profile, you'd add:
+```c++
+//Car Ok
+if (check_lane < 0) {
+continue;
+}
+if (check_lane == lane){
+// Lane OK
+car_ahead |= (s > car_s && s - car_s < SECURITY_DISTANCE) ? true : false;
+if (car_ahead) {
+final_vel = check_speed;
+}
+}else if ( (check_lane - lane) == -1 ) {
+//Lane left
+car_left |= (car_s - SECURITY_DISTANCE < s && car_s + SECURITY_DISTANCE > s) ? true : false;
+}else if ( (check_lane - lane) == 1 ) {
+// Lane right
+car_right |= (car_s - SECURITY_DISTANCE < s && car_s + SECURITY_DISTANCE > s) ? true : false;
+} else {
+;
+}
+```
 
-* /ide_profiles/vscode/.vscode
-* /ide_profiles/vscode/README.md
-
-The README should explain what the profile does, how to take advantage of it,
-and how to install it.
-
-Frankly, I've never been involved in a project with multiple IDE profiles
-before. I believe the best way to handle this would be to keep them out of the
-repo root to avoid clutter. My expectation is that most profiles will include
-instructions to copy files to a new location to get picked up by the IDE, but
-that's just a guess.
-
-One last note here: regardless of the IDE used, every submitted project must
-still be compilable with cmake and make./
-
-## How to write a README
-A well written README file can enhance your project and portfolio.  Develop your abilities to create professional README files by completing [this free course](https://www.udacity.com/course/writing-readmes--ud777).
+### Speed control
+There is only one case that is important in this, and is that if we are following a car on which the above logic returns that we cannot over take the car, we just match their speed.
 
